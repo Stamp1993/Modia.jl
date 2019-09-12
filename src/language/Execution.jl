@@ -592,13 +592,13 @@ function simulate_ida_der(instance::Instance, var, var_val, k, t::Vector{Float64
                       log=false, relTol=1e-4, hev=1e-8, maxSparsity=0.1,
                       store_eliminated=storeEliminated)
     instance.variables[var] = var_val
-    simulate_ida(instance,  t, jac;# =nothing;
+    simulate_ida_for_der(instance,  t, jac;# =nothing;
                           log=log, relTol=relTol, hev=hev, maxSparsity=maxSparsity,
                           store_eliminated=storeEliminated)[k]
 
 end
 
-function simulate_ida(instance::Instance, t::Vector{Float64},
+function simulate_ida_for_der(instance::Instance, t::Vector{Float64},
                       jac::Union{SparseMatrixCSC{Bool,Int},Nothing};# =nothing;
                       log=false, relTol=1e-4, hev=1e-8, maxSparsity=0.1,
                       store_eliminated=storeEliminated)
@@ -695,7 +695,7 @@ function simulate_ida(instance::Instance, t::Vector{Float64},
         end
         # @show now()-start
     end
-    results["time"] = t_res
+    #results["time"] = t_res
     results
 end
 
