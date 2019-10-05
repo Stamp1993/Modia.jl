@@ -54,7 +54,7 @@ end
 
 export elaborate, prettyPrint, simulateModel, simulate, simulate_der, skewCoords, skew, residue, residue_der, modiaCross, showExpr, transformModel, simulateMultiModeModel, allInstances
 # export modiaSwitches, defineSwitch, setSwitch, showSwitches, getSwitch,
-export checkSimulation
+export checkSimulation, simulateTimes
 
 const useIncidenceMatrix = BasicStructuralTransform.useIncidenceMatrix
 const elaborate = true
@@ -315,7 +315,6 @@ function simulateModelWithOptions(model, t; options=Dict())
     openLogModia()
 
     start = time_ns()
-    println("check")
     setDerAsFunction(false)
     if BasicStructuralTransform.logStatistics
         println("\nSimulating model: ", model.name)
@@ -414,9 +413,9 @@ function simulateModelWithOptions(model, t; options=Dict())
         println(@sprintf("Total time: %0.3f", (time_ns() - start) * 1E-9), " seconds")
     end
     closeLogModia()
-    println("something")
-    println("noRes = $noResult")
-    println("res = $res")
+    #println("something")
+    #println("noRes = $noResult")
+    #println("res = $res")
     #test_expr!("@test", ex, kws...)
     #orig_ex = Expr(:inert, ex)
     #result = get_test_result(ex, __source__)
@@ -610,6 +609,17 @@ end
 
 function simulate(model, stopTime; startTime=0, options...)
     nSteps = 1000
+    @static if VERSION < v"0.7.0-DEV.2005"
+        t = linspace(startTime, stopTime, nSteps)
+    else
+        t = range(startTime, stop=stopTime, length=nSteps)
+    end
+
+    return simulateModelWithOptions(model, t, options=options)
+end
+
+function simulateTimes(model, stopTime, times; startTime=0, options...)
+    nSteps = 1000*times
     @static if VERSION < v"0.7.0-DEV.2005"
         t = linspace(startTime, stopTime, nSteps)
     else
