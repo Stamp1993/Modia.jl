@@ -18,7 +18,7 @@ const fileStdOut = false
 # ----------------------------------------------------------------------------
 
 #using Debug
-using Zygote
+#using Zygote
 using ..Instantiation
 using ..Execution
 using Base.Meta: quot, isexpr
@@ -54,7 +54,7 @@ end
 
 export elaborate, prettyPrint, simulateModel, simulate, simulate_der, skewCoords, skew, residue, residue_der, modiaCross, showExpr, transformModel, simulateMultiModeModel, allInstances
 # export modiaSwitches, defineSwitch, setSwitch, showSwitches, getSwitch,
-export checkSimulation, simulateTimes
+export checkSimulation, simulateTimes, simulateSteps
 
 const useIncidenceMatrix = BasicStructuralTransform.useIncidenceMatrix
 const elaborate = true
@@ -618,8 +618,20 @@ function simulate(model, stopTime; startTime=0, options...)
     return simulateModelWithOptions(model, t, options=options)
 end
 
+function simulateSteps(model, stopTime, steps; startTime=0,  options...)
+    nSteps = 1000
+    @static if VERSION < v"0.7.0-DEV.2005"
+        t = linspace(startTime, stopTime, nSteps)
+    else
+        t = range(startTime, stop=stopTime, length=nSteps)
+    end
+
+    return simulateMultiModeModel(model, startTime, stopTime; n=1000, m=steps, options...)
+    #simulateModelWithOptions(model, t, options=options)
+end
+
 function simulateTimes(model, stopTime, times; startTime=0, options...)
-    nSteps = 1000*times
+    nSteps = 60*times
     @static if VERSION < v"0.7.0-DEV.2005"
         t = linspace(startTime, stopTime, nSteps)
     else
@@ -752,8 +764,29 @@ function simulateMultiModeModel(model, t0, t1; n=1000, m=100, options...)
     ModiaLogging.setOptions(opt)
     StructuralTransform.setOptions(opt)
     BasicStructuralTransform.setOptions(opt)
-    Instiantiation.setOptions(opt)
+    Instantiation.setOptions(opt)
     Execution.setOptions(opt)
+    logSimulation = false
+    if haskey(opt, :logSimulation)
+        logSimulation = opt[:logSimulation]
+        @show logSimulation
+        delete!(opt, :logSimulation)
+    end
+
+    relTol = 1e-4
+    if haskey(opt, :relTol)
+        relTol = opt[:relTol]
+        @show relTol
+        delete!(opt, :relTol)
+    end
+
+    hev = 1e-8
+    if haskey(opt, :hev)
+        hev = opt[:hev]
+        @show hev
+        delete!(opt, :hev)
+    end
+
     if length(keys(opt)) >= 0
         println("Option(s) not found: ", keys(opt))
     end
@@ -763,15 +796,69 @@ function simulateMultiModeModel(model, t0, t1; n=1000, m=100, options...)
 
     dt = (t1 - t0) / m
     @static if VERSION < v"0.7.0-DEV.2005"
-        times1 = linspace(t0, t0 + dt, 100)
+        times1 = linspace(t0, t0 + dt, n)
     else
-        times1 = range(t0, stop=t0 + dt, length=100)
+        times1 = range(t0, stop=t0 + dt, length=n)
+    end
+    setDerAsFunction(false)
+    if BasicStructuralTransform.logStatistics
+        println("\nSimulating model: ", model.name)
+    end
+    loglnModia("\nSimulating model: ", model.name)
+
+    if PrintOriginalModel
+        loglnModia("ORIGINAL MODEL:")
+        showModel(model)
     end
 
-    model1 = flatten(instantiate(model, t0, Dict()))
+    if logTiming
+        print("Instantiate:           ")
+        @time modified_model = instantiate(model, first(times1))
+    else
+        modified_model = instantiate(model, first(times1))
+    end
+    traverseAndSubstituteAllInstances(:(), modified_model, modified_model, false)
+
+    if PrintInstantiated
+        loglnModia("INSTANTIATED MODEL:")
+        showInstance(modified_model)
+        loglnModia()
+    end
+
+    if PrintJSON
+        name = string(modified_model.model_name)
+        file = open(name * ".JSON", "w")
+        printJSON(file, modified_model, name, name)
+        close(file)
+    end
+
+    if logTiming
+        print("Flatten:               ")
+        @time flat_model = flatten(modified_model)
+    else
+        flat_model = flatten(modified_model)
+    end
+    traverseAndSubstituteAllInstances(:(), modified_model, flat_model, true)
+
+    if PrintFlattened
+        loglnModia("\nFLATTENED MODEL")
+        showInstance(flat_model)
+        loglnModia()
+    end
+
+    if elaborate
+        model1 = elaborateModel(flat_model)
+        if model1 == nothing
+            return nothing
+        end
+    else
+        model1 = flat_model
+    end
+    #model1 = flatten(instantiate(model, Float64(t0), Dict()))
     #  model1 = elaborateModel(flatten(instantiate(model, t0, Dict())))
     println("\nSub-simulation 1; startTime=$t0, interval=$dt")
-    res1 = simulate_ida(model1, times1, if false; nothing else nothing end, log=false)
+    #res1 = simulate_ida(model1, times1, if false; nothing else nothing end, log=false)
+    res1 = simulate_ida(model1, times1, if useIncidenceMatrix; incidenceMatrix else nothing end, log=logSimulation, relTol=relTol, hev=hev)
     tn = t0 + dt
 
     for step in 2:m
@@ -783,11 +870,66 @@ function simulateMultiModeModel(model, t0, t1; n=1000, m=100, options...)
         finals = Dict(name => if length(values) > 0; values[end] else false end for (name, values) in res1)
 
         @static if VERSION < v"0.7.0-DEV.2005"
-            times2 = linspace(tn, tn + dt, 100)
+            times2 = linspace(tn, tn + dt, n)
         else
-            times2 = range(tn, stop=tn + dt, length=100)
+            times2 = range(tn, stop=tn + dt, length=n)
         end
-        model2 = flatten(instantiate(model, tn, Dict()))
+        #setDerAsFunction(false)
+        if BasicStructuralTransform.logStatistics
+            println("\nSimulating model: ", model.name)
+        end
+        loglnModia("\nSimulating model: ", model.name)
+
+        if PrintOriginalModel
+            loglnModia("ORIGINAL MODEL:")
+            showModel(model)
+        end
+
+        if logTiming
+            print("Instantiate:           ")
+            @time modified_model = instantiate(model, first(times2))
+        else
+            modified_model = instantiate(model, first(times2))
+        end
+        traverseAndSubstituteAllInstances(:(), modified_model, modified_model, false)
+
+        if PrintInstantiated
+            loglnModia("INSTANTIATED MODEL:")
+            showInstance(modified_model)
+            loglnModia()
+        end
+
+        if PrintJSON
+            name = string(modified_model.model_name)
+            file = open(name * ".JSON", "w")
+            printJSON(file, modified_model, name, name)
+            close(file)
+        end
+
+        if logTiming
+            print("Flatten:               ")
+            @time flat_model = flatten(modified_model)
+        else
+            flat_model = flatten(modified_model)
+        end
+        traverseAndSubstituteAllInstances(:(), modified_model, flat_model, true)
+
+        if PrintFlattened
+            loglnModia("\nFLATTENED MODEL")
+            showInstance(flat_model)
+            loglnModia()
+        end
+
+        if elaborate
+            model2 = elaborateModel(flat_model)
+            if model2 == nothing
+                return nothing
+            end
+        else
+            model2 = flat_model
+        end
+
+        #model2 = flatten(instantiate(model, tn, Dict()))
 
         # carry over final values
         vars = vars_of(model2)
@@ -803,13 +945,30 @@ function simulateMultiModeModel(model, t0, t1; n=1000, m=100, options...)
             end
         end
 
-        res2 = simulate_ida(model2, times2, if false; nothing else nothing end, log=false)
+        #res2 = simulate_ida(model2, times2, if false; nothing else nothing end, log=false)
+        res2 = simulate_ida(model2, times2, if useIncidenceMatrix; incidenceMatrix else nothing end, log=logSimulation, relTol=relTol, hev=hev)
         for (name, values) in res1
             res1[name] = vcat(res1[name], res2[name])
         end
         tn += dt
     end
 
+    setDerAsFunction(true)
+
+    if fileStdOut
+        #  close(outWrite)
+        output = readavailable(outRead)
+        close(outRead)
+        redirect_stdout(originalSTDOUT)
+        print(String(output))
+    end
+
+    if logTiming
+        println(@sprintf("Total time: %0.3f", (time_ns() - start) * 1E-9), " seconds")
+    end
+    closeLogModia()
+
+    println("res = $res1")
     return res1
 end
 
